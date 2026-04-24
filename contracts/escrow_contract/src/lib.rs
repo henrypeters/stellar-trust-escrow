@@ -3775,4 +3775,96 @@ mod tests {
         );
         assert_eq!(mid, 0);
     }
+
+    #[test]
+    fn test_recurring_schedule_full_pause_resume_cancel() {
+        let (env, admin, contract_id, client) = setup();
+        client.initialize(&admin);
+
+        let escrow_client = Address::generate(&env);
+        let freelancer = Address::generate(&env);
+        let token_contract = env.register_stellar_asset_contract_v2(admin.clone());
+        let token_id = token_contract.address();
+        let token_admin = token::StellarAssetClient::new(&env, &token_id);
+        let token_client = token::Client::new(&env, &token_id);
+
+        let total_reserve = 2 * ContractStorage::reserve_for_entries(1);
+        token_admin.mint(&escrow_client, &(300_i128 + total_reserve));
+
+        // Schedule: 3 payments of 100, first due in 100s
+        let start_time = env.ledger().timestamp() + 100;
+        let escrow_id = client.create_recurring_escrow(
+            &escrow_client,
+            &freelancer,
+            &token_id,
+            &100_i128,
+            &RecurringInterval::Daily,
+            &start_time,
+            &None,
+            &Some(3_u32),
+            &BytesN::from_array(&env, &[20; 32]),
+        );
+
+        // ── 1. Pause ─────────────────────────────────────────────────────────
+        let pause_time = env.ledger().timestamp();
+        client.pause_recurring_schedule(&escrow_client, &escrow_id);
+
+        let recurring = client.get_recurring_config(&escrow_id);
+        assert!(recurring.paused);
+        assert_eq!(recurring.paused_at, Some(pause_time));
+
+        // ── 2. process_recurring_payments returns RecurringSchedulePaused ────
+        advance(&env, 200); // advance past start_time
+        let err = client
+            .try_process_recurring_payments(&escrow_id)
+            .unwrap_err()
+            .unwrap();
+        assert_eq!(err, EscrowError::RecurringSchedulePaused);
+
+        // ── 3. Resume adjusts next_payment_at ────────────────────────────────
+        let resume_time = env.ledger().timestamp();
+        client.resume_recurring_schedule(&escrow_client, &escrow_id);
+
+        let recurring = client.get_recurring_config(&escrow_id);
+        assert!(!recurring.paused);
+        assert_eq!(recurring.paused_at, None);
+        // next_payment_at = now.max(original next_payment_at); since we advanced
+        // 200s past start_time, now > start_time so next_payment_at == resume_time
+        assert_eq!(recurring.next_payment_at, resume_time);
+
+        // ── 4. Cancel refunds remaining balance to client ─────────────────────
+        let balance_before = token_client.balance(&escrow_client);
+        let remaining = client.get_escrow(&escrow_id).remaining_balance;
+        client.cancel_recurring_escrow(&escrow_client, &escrow_id);
+
+        let recurring = client.get_recurring_config(&escrow_id);
+        assert!(recurring.cancelled);
+        assert_eq!(
+            client.get_escrow(&escrow_id).status,
+            EscrowStatus::Cancelled
+        );
+        assert_eq!(
+            token_client.balance(&escrow_client),
+            balance_before + remaining
+        );
+
+        // ── 5. rec_can event emitted with correct refund amount ───────────────
+        let all_events = env.events().all();
+        let rec_can_event = all_events.iter().find(|(contract, topics, _)| {
+            *contract == contract_id
+                && topics
+                    .get(0)
+                    .and_then(|v| {
+                        soroban_sdk::Symbol::try_from_val(&env, &v).ok()
+                    })
+                    .map(|s| s == soroban_sdk::symbol_short!("rec_can"))
+                    .unwrap_or(false)
+        });
+        assert!(rec_can_event.is_some(), "rec_can event not emitted");
+        let (_, _, payload) = rec_can_event.unwrap();
+        let (cancelled_by, refund_amount): (Address, i128) =
+            soroban_sdk::FromVal::from_val(&env, &payload);
+        assert_eq!(cancelled_by, escrow_client);
+        assert_eq!(refund_amount, remaining);
+    }
 }
