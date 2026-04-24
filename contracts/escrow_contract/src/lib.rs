@@ -2700,7 +2700,7 @@ impl EscrowContract {
 mod tests {
     use super::*;
     use soroban_sdk::{
-        testutils::{Address as _, Ledger as _},
+        testutils::{Address as _, Events as _, Ledger as _},
         token, BytesN, Env, String,
     };
 
@@ -3774,5 +3774,110 @@ mod tests {
             &50_i128,
         );
         assert_eq!(mid, 0);
+    }
+
+    // ── create_recurring_escrow interval variants ─────────────────────────────
+
+    fn setup_recurring(
+        env: &Env,
+        client: &EscrowContractClient,
+        admin: &Address,
+        interval: RecurringInterval,
+        total_payments: u32,
+    ) -> (Address, Address, Address, u64, u64) {
+        client.initialize(admin);
+        let escrow_client = Address::generate(env);
+        let freelancer = Address::generate(env);
+        let token_contract = env.register_stellar_asset_contract_v2(admin.clone());
+        let token_id = token_contract.address();
+        let total_reserve = 2 * ContractStorage::reserve_for_entries(1);
+        token::StellarAssetClient::new(env, &token_id)
+            .mint(&escrow_client, &(100_i128 * total_payments as i128 + total_reserve));
+        let start_time = env.ledger().timestamp() + 100;
+        let escrow_id = client.create_recurring_escrow(
+            &escrow_client,
+            &freelancer,
+            &token_id,
+            &100_i128,
+            &interval,
+            &start_time,
+            &None,
+            &Some(total_payments),
+            &BytesN::from_array(env, &[7u8; 32]),
+        );
+        (escrow_client, freelancer, token_id, escrow_id, start_time)
+    }
+
+    #[test]
+    fn test_create_recurring_escrow_daily() {
+        let (env, admin, contract_id, client) = setup();
+        let (_, _, _, escrow_id, start_time) =
+            setup_recurring(&env, &client, &admin, RecurringInterval::Daily, 3);
+
+        let recurring = client.get_recurring_config(&escrow_id);
+        assert_eq!(recurring.next_payment_at, start_time);
+        assert_eq!(recurring.payments_remaining, 3);
+
+        // Verify rec_crt event payload
+        let all = env.events().all();
+        let rec_crt_event = all.iter().find(|(addr, topics, _)| {
+            *addr == contract_id
+                && soroban_sdk::Symbol::try_from_val(&env, &topics.get(0).unwrap())
+                    == Ok(soroban_sdk::symbol_short!("rec_crt"))
+        });
+        let (_, _, data) = rec_crt_event.expect("rec_crt event not emitted");
+        let (amt, total, next): (i128, u32, u64) =
+            soroban_sdk::FromVal::from_val(&env, &data);
+        assert_eq!(amt, 100_i128);
+        assert_eq!(total, 3);
+        assert_eq!(next, start_time);
+    }
+
+    #[test]
+    fn test_create_recurring_escrow_weekly() {
+        let (env, admin, contract_id, client) = setup();
+        let (_, _, _, escrow_id, start_time) =
+            setup_recurring(&env, &client, &admin, RecurringInterval::Weekly, 4);
+
+        let recurring = client.get_recurring_config(&escrow_id);
+        assert_eq!(recurring.next_payment_at, start_time);
+        assert_eq!(recurring.payments_remaining, 4);
+
+        let all = env.events().all();
+        let rec_crt_event = all.iter().find(|(addr, topics, _)| {
+            *addr == contract_id
+                && soroban_sdk::Symbol::try_from_val(&env, &topics.get(0).unwrap())
+                    == Ok(soroban_sdk::symbol_short!("rec_crt"))
+        });
+        let (_, _, data) = rec_crt_event.expect("rec_crt event not emitted");
+        let (amt, total, next): (i128, u32, u64) =
+            soroban_sdk::FromVal::from_val(&env, &data);
+        assert_eq!(amt, 100_i128);
+        assert_eq!(total, 4);
+        assert_eq!(next, start_time);
+    }
+
+    #[test]
+    fn test_create_recurring_escrow_monthly() {
+        let (env, admin, contract_id, client) = setup();
+        let (_, _, _, escrow_id, start_time) =
+            setup_recurring(&env, &client, &admin, RecurringInterval::Monthly, 2);
+
+        let recurring = client.get_recurring_config(&escrow_id);
+        assert_eq!(recurring.next_payment_at, start_time);
+        assert_eq!(recurring.payments_remaining, 2);
+
+        let all = env.events().all();
+        let rec_crt_event = all.iter().find(|(addr, topics, _)| {
+            *addr == contract_id
+                && soroban_sdk::Symbol::try_from_val(&env, &topics.get(0).unwrap())
+                    == Ok(soroban_sdk::symbol_short!("rec_crt"))
+        });
+        let (_, _, data) = rec_crt_event.expect("rec_crt event not emitted");
+        let (amt, total, next): (i128, u32, u64) =
+            soroban_sdk::FromVal::from_val(&env, &data);
+        assert_eq!(amt, 100_i128);
+        assert_eq!(total, 2);
+        assert_eq!(next, start_time);
     }
 }
