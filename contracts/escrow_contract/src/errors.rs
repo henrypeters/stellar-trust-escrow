@@ -97,4 +97,8 @@ pub enum EscrowError {
     // ── Bridge / Cross-Chain ─────────────────────────────────────────────────
     /// Wrapped token not approved, transfer not found, or bridge not yet finalized.
     BridgeError = 54,
+
+    // ── Input Validation ─────────────────────────────────────────────────────
+    /// A string argument exceeds MAX_STRING_LEN or is empty.
+    StringTooLong = 55,
 }

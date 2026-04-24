@@ -371,3 +371,21 @@ pub fn emit_slash_dispute_resolved(env: &Env, escrow_id: u64, upheld: bool, amou
     env.events()
         .publish((symbol_short!("slsh_res"), escrow_id), (upheld, amount));
 }
+
+/// Emitted when a client updates a pending milestone's title.
+///
+/// # Arguments
+/// * `escrow_id`    - The escrow ID
+/// * `milestone_id` - The milestone whose title was updated
+/// * `new_title`    - The corrected title
+pub fn emit_milestone_title_updated(
+    env: &Env,
+    escrow_id: u64,
+    milestone_id: u32,
+    new_title: &soroban_sdk::String,
+) {
+    env.events().publish(
+        (symbol_short!("mil_tup"), escrow_id),
+        (milestone_id, new_title.clone()),
+    );
+}
